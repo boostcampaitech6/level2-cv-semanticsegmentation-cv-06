@@ -77,4 +77,4 @@ max_binlog_size   = 100M
 # binlog_ignore_db	= include_database_name
 
 ##
-port = 30150
+port = 30010
