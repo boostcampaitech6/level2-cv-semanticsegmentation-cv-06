@@ -28,6 +28,7 @@ segmentation-models-pytorch = "^0.3.3"
 pandas = "^2.0.2"
 transformers = "^4.30.2"
 optuna = "^3.2.0"
+scikit-learn = "^1.4.0"
 
 [[tool.poetry.source]]
 name = "pytorch"
