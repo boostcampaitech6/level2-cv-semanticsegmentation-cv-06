@@ -1,12 +1,9 @@
 # python native
 import os
 import datetime
-from functools import partial
 
 # external library
-import cv2
 import numpy as np
-import pandas as pd
 from tqdm.auto import tqdm
 import albumentations as A
 from PIL import Image
@@ -22,15 +19,14 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision import models
 from torchvision.transforms.functional import to_pil_image
 
-# visualization
-import matplotlib.pyplot as plt
-
 from dataset import XRayDataset
-from utils import set_seed, label2rgb
+from utils import set_seed, label2rgb, label2rgba, fp2rgb, fn2rgb
 from loss import focal_loss, dice_loss, calc_loss
 import wandb
 
+import warnings
 
+warnings.filterwarnings("ignore")
 
 CLASSES = [
     'finger-1', 'finger-2', 'finger-3', 'finger-4', 'finger-5',
@@ -53,30 +49,36 @@ def dice_coef(y_true, y_pred):
     return (2. * intersection + eps) / (torch.sum(y_true_f, -1) + torch.sum(y_pred_f, -1) + eps)
 
 # 모델 저장
-def save_model(model, save_dir, file_name='fcn_resnet50_best_model.pt'):
+def save_model(model, save_dir, file_name='best.pt'):
     os.makedirs(save_dir, exist_ok=True)
     output_path = os.path.join(save_dir, file_name)
     torch.save(model, output_path)
     
 def visualize_and_log_wandb(results, epoch):
     for result in results:
-        for output, mask, image_path in result:
-            # Convert tensors to numpy arrays
+        for output, mask, image, image_path in result:
+
             output_np = output.numpy()
             mask_np = mask.numpy()
+            image_np = image.numpy().transpose(1,2,0)
+            file_name = '/'.join(image_path.split('/')[-2:])
 
-            # Transform PIL images to RGB using label2rgb
-            output_rgb = label2rgb(output_np)
-            mask_rgb = label2rgb(mask_np)
+            output_rgba = label2rgba(output_np)
+            mask_rgba = label2rgba(mask_np)
+            fp_rgb = fp2rgb(mask_np, output_np)
+            fn_rgb = fn2rgb(mask_np, output_np)
 
-            # Log images to wandb
-            wandb.log({f"images on {epoch+1} epochs": [wandb.Image(image_path, caption=f"GT Image \n {image_path.split('/')[-2:]}"),
-                                  wandb.Image(to_pil_image(mask_rgb), caption="GT Mask"),
-                                  wandb.Image(to_pil_image(output_rgb), caption="Model Prediction")
-                                  ]})
+            #Log images to wandb
+            wandb.log({f"images on {epoch+1} epochs": 
+                    [wandb.Image(image_np, caption=f"GT Image \n {file_name}"),
+                    wandb.Image(mask_rgba, caption="GT Mask"),
+                    wandb.Image(output_rgba, caption="Model Prediction"),
+                    wandb.Image(to_pil_image(fp_rgb), caption="false positive"),
+                    wandb.Image(to_pil_image(fn_rgb), caption="false negative")]
+                    })
     
 # validation
-def validation(epoch, model, val_loader, criterion, thr=0.5):
+def validation(epoch, model, val_loader, thr=0.5):
     print(f'Start validation #{epoch:2d}')
     model.eval()
 
@@ -84,12 +86,10 @@ def validation(epoch, model, val_loader, criterion, thr=0.5):
     results = []
     with torch.no_grad():
         n_class = len(CLASSES)
-        total_loss = 0
-        cnt = 0
 
         for step, (images, masks, image_paths) in tqdm(enumerate(val_loader), total=len(val_loader)):
-            images, masks = images.cuda(), masks.cuda()         
-            model = model.cuda()
+            images, masks = images.cuda(), masks.cuda()          
+            model = model.cuda()    
             
             outputs = model(images)['out']
             
@@ -100,18 +100,13 @@ def validation(epoch, model, val_loader, criterion, thr=0.5):
             if output_h != mask_h or output_w != mask_w:
                 outputs = F.interpolate(outputs, size=(mask_h, mask_w), mode="bilinear")
             
-            loss = criterion(outputs, masks)
-            total_loss += loss
-            cnt += 1
-            
             outputs = torch.sigmoid(outputs)
-            outputs = (outputs > thr).detach().cpu()
-            masks = masks.detach().cpu()
+            outputs = (outputs > thr)
             
-            dice = dice_coef(outputs, masks)
+            dice = dice_coef(masks, outputs)
             dices.append(dice)
             
-            result = [(o, m, p) for o, m, p in zip(outputs, masks, image_paths)]
+            result = [(o, m, i, p) for o, m, i, p in zip(outputs.detach().cpu(), masks.detach().cpu(), images.detach().cpu(), image_paths)]
             results.append(result)
                 
     dices = torch.cat(dices, 0)
@@ -125,7 +120,7 @@ def validation(epoch, model, val_loader, criterion, thr=0.5):
     
     avg_dice = torch.mean(dices_per_class).item()
     
-    return avg_dice, results
+    return avg_dice, results, dice_str
 
 def train(args, model, train_loader, val_loader, criterion, optimizer, scheduler):
     print(f'Start training..')
@@ -139,9 +134,8 @@ def train(args, model, train_loader, val_loader, criterion, optimizer, scheduler
 
         for step, (images, masks, _) in enumerate(train_loader):            
             # gpu 연산을 위해 device 할당합니다.
-            images, masks = images.cuda(), masks.cuda()
-            model = model.cuda()
-            
+            images, masks = images.cuda(), masks.cuda()    
+            model = model.cuda()        
             outputs = model(images)['out']
             
             # loss를 계산합니다.
@@ -166,7 +160,8 @@ def train(args, model, train_loader, val_loader, criterion, optimizer, scheduler
         # validation 주기에 따라 loss를 출력하고 best model을 저장합니다.
         # validation 함수는 위에 정의됨
         if (epoch + 1) % args.val_interval == 0:
-            dice, results = validation(epoch + 1, model, val_loader, criterion)
+            dice, results, dice_log = validation(epoch + 1, model, val_loader)
+            
             wandb.log({'dice score': dice})
             
             print("Wandb image logging ...")
@@ -179,6 +174,11 @@ def train(args, model, train_loader, val_loader, criterion, optimizer, scheduler
                 save_model(model, os.path.join(args.save_dir, serial), file_name=f'{epoch+1}.pt')
                 save_model(model, os.path.join(args.save_dir, serial), file_name='best.pt')
                 
+                dice_per_class_log = os.path.join(args.save_dir, serial, 'dice_per_class.txt')
+                with open(dice_per_class_log, 'a', encoding='utf-8') as file:
+                    file.write("="*10+f" validation_{epoch+1} "+"="*10 +"\n")
+                    file.write(dice_log)
+                    file.write("\n")
                 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train a segmentor')
@@ -193,14 +193,16 @@ def parse_args():
 
     return args
 
-
 def main(args):
+    
+    # seed 666
+    set_seed()
     
     # transform 정의
     tf = A.Resize(512, 512)
     
     train_dataset = XRayDataset(args.image_root, args.label_root, is_train=True, transforms=tf)
-    valid_dataset = XRayDataset(args.image_root, args.label_root, is_train=True, transforms=tf)
+    valid_dataset = XRayDataset(args.image_root, args.label_root, is_train=False, transforms=tf)
 
     train_loader = DataLoader(
         dataset=train_dataset, 
@@ -214,12 +216,9 @@ def main(args):
         dataset=valid_dataset, 
         batch_size=8,
         shuffle=False,
-        num_workers=0,
+        num_workers=2,
         drop_last=False
     )
-    
-    # seed 666
-    set_seed()
     
     #model = models.segmentation.fcn_resnet101(pretrained=True)
     #model.classifier[4] = nn.Conv2d(512, len(CLASSES), kernel_size=1)
@@ -240,7 +239,7 @@ if __name__ == '__main__':
     
     wandb.init(project="CV06_Segmantation",
                #entity="innovation-vision-tech",
-               name=f"deeplabv3_resnet101_{args.num_epochs}e_calcloss(dice3,ce1)_adam_MultiStepLR",
+               name=f"deeplabv3_resnet101_{args.num_epochs}e_calcloss(dice3,bce1)_adam_MultiStepLR",
                notes="",
                config={
                     "batch_size": args.batch_size,
@@ -248,4 +247,9 @@ if __name__ == '__main__':
                     "Epochs": args.num_epochs,
                 })
     
+    start_time = datetime.datetime.now()
     main(args)
+    end_time = datetime.datetime.now()
+    
+    elapsed_time = end_time - start_time
+    print(f"총 학습 시간: {str(elapsed_time)}")

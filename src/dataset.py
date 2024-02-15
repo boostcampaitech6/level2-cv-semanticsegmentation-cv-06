@@ -13,7 +13,10 @@ import albumentations as A
 # torch
 import torch
 from torch.utils.data import Dataset
+from utils import set_seed
 
+# seed 666
+set_seed()
 
 class XRayDataset(Dataset):
     def __init__(self, image_root, label_root, is_train=True, transforms=None):
