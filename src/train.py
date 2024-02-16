@@ -21,7 +21,7 @@ from torchvision import models
 from torchvision.transforms.functional import to_pil_image
 
 from dataset import XRayDataset
-from utils import set_seed, label2rgba, fp2rgb, fn2rgb
+from utils import set_seed, label2rgba, fp2rgb, tn2rgb
 from loss import focal_loss, dice_loss, calc_loss
 import wandb
 
@@ -85,7 +85,7 @@ def visualize_and_log_wandb(results, epoch, gray=False):
             output_rgba = label2rgba(output_np, image_np)
             mask_rgba = label2rgba(mask_np, image_np)
             fp_rgba = fp2rgb(mask_np, output_np, image_np)
-            fn_rgba = fn2rgb(mask_np, output_np, image_np)
+            tn_rgba = tn2rgb(mask_np, output_np, image_np)
             gt_img = image_np
 
             #Log images to wandb
@@ -94,7 +94,7 @@ def visualize_and_log_wandb(results, epoch, gray=False):
                     wandb.Image(mask_rgba, caption="GT Mask"),
                     wandb.Image(output_rgba, caption="Model Prediction"),
                     wandb.Image(fp_rgba, caption="false positive"),
-                    wandb.Image(fn_rgba, caption="false negative")]
+                    wandb.Image(tn_rgba, caption="true negative")]
                     })
     
     

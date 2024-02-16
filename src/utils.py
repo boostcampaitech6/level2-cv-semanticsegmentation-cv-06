@@ -57,8 +57,8 @@ def label2rgba(label, image_np):
     return result_image
 
 
-# 실제 정답인데 정답이 아니라고 한 것 (false negative)
-def fn2rgb(true, pred, image_np):
+# 실제 정답인데 정답이 아니라고 한 것 (true negative)
+def tn2rgb(true, pred, image_np):
     image_size = (512,512) + (4, )  # Add an alpha channel
     result_image = Image.fromarray(np.zeros((512, 512, 4), dtype=np.uint8), 'RGBA')
     result_image.paste(Image.fromarray(image_np, 'RGB'), (0, 0))
@@ -67,9 +67,9 @@ def fn2rgb(true, pred, image_np):
         pred_label = resize(pred_label, (512,512))
         true_label = resize(true[i], (512,512))
         mistake = pred_label != true_label
-        false_negative = mistake & (true_label == 1)
+        true_negative = mistake & (true_label == 1)
         image = np.zeros(image_size, dtype=np.uint8)
-        image[false_negative] = PALETTE[i] + (128,)
+        image[true_negative] = PALETTE[i] + (128,)
         result_image = Image.alpha_composite(result_image, Image.fromarray(image, 'RGBA'))
         
     return result_image
