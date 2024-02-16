@@ -42,9 +42,10 @@ def label2rgb(label):
     return image
 
 # 겹쳐진 클래스 고려한 시각화
-def label2rgba(label):
+def label2rgba(label, image_np):
     image_size = (512,512) + (4, )  # Add an alpha channel
-    result_image = Image.new('RGBA', image_size[:-1], (0, 0, 0, 0))
+    result_image = Image.fromarray(np.zeros((512, 512, 4), dtype=np.uint8), 'RGBA')
+    result_image.paste(Image.fromarray(image_np, 'RGB'), (0, 0))
     
     for i, class_label in enumerate(label):
         class_label = resize(class_label, (512,512))
@@ -57,33 +58,39 @@ def label2rgba(label):
 
 
 # 실제 정답인데 정답이 아니라고 한 것 (false negative)
-def fn2rgb(true, pred):
-    image_size = (512, 512) + (3, )
-    image = np.zeros(image_size, dtype=np.uint8)
+def fn2rgb(true, pred, image_np):
+    image_size = (512,512) + (4, )  # Add an alpha channel
+    result_image = Image.fromarray(np.zeros((512, 512, 4), dtype=np.uint8), 'RGBA')
+    result_image.paste(Image.fromarray(image_np, 'RGB'), (0, 0))
     
     for i, pred_label in enumerate(pred):
         pred_label = resize(pred_label, (512,512))
         true_label = resize(true[i], (512,512))
         mistake = pred_label != true_label
         false_negative = mistake & (true_label == 1)
-        image[false_negative] = PALETTE[i]
+        image = np.zeros(image_size, dtype=np.uint8)
+        image[false_negative] = PALETTE[i] + (128,)
+        result_image = Image.alpha_composite(result_image, Image.fromarray(image, 'RGBA'))
         
-    return image
+    return result_image
         
 
 # 실제 정답이 아닌데 정답이라고 한 것 (false positive)
-def fp2rgb(true, pred):
-    image_size = (512, 512) + (3, )
-    image = np.zeros(image_size, dtype=np.uint8)
+def fp2rgb(true, pred, image_np):
+    image_size = (512,512) + (4, )  # Add an alpha channel
+    result_image = Image.fromarray(np.zeros((512, 512, 4), dtype=np.uint8), 'RGBA')
+    result_image.paste(Image.fromarray(image_np, 'RGB'), (0, 0))
     
     for i, pred_label in enumerate(pred):
         pred_label = resize(pred_label, (512,512))
         true_label = resize(true[i], (512,512))
         mistake = pred_label != true_label
         false_positive = mistake & (true_label == 0)
-        image[false_positive] = PALETTE[i]
+        image = np.zeros(image_size, dtype=np.uint8)
+        image[false_positive] = PALETTE[i] + (128,)
+        result_image = Image.alpha_composite(result_image, Image.fromarray(image, 'RGBA'))
         
-    return image
+    return result_image
     
 
 # confusion matrix

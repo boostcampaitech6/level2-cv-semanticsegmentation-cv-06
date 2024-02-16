@@ -20,7 +20,7 @@ from torchvision import models
 from torchvision.transforms.functional import to_pil_image
 
 from dataset import XRayDataset
-from utils import set_seed, label2rgb, label2rgba, fp2rgb, fn2rgb
+from utils import set_seed, label2rgba, fp2rgb, fn2rgb
 from loss import focal_loss, dice_loss, calc_loss
 import wandb
 
@@ -70,25 +70,28 @@ def loss_check(epoch, loss, pre_loss, file_list, save_dir, serial):
 # wandb 시각화
 def visualize_and_log_wandb(results, epoch):
     for result in tqdm(results, total=len(results)):
-        for output, mask, image_path in result:
+        for output, mask, image, image_path in result:
 
             output_np = output.numpy()
             mask_np = mask.numpy()
+            image_np = np.array(image)
+            image_np = (image_np.transpose(1, 2, 0) * 255.).astype('uint8')
+            image_np = np.array(Image.fromarray(image_np).resize((512, 512)))
             file_name = '/'.join(image_path.split('/')[-2:])
 
-            output_rgba = label2rgba(output_np)
-            mask_rgba = label2rgba(mask_np)
-            fp_rgb = fp2rgb(mask_np, output_np)
-            fn_rgb = fn2rgb(mask_np, output_np)
-            gt_img = Image.open(image_path).resize((512,512))
+            output_rgba = label2rgba(output_np, image_np)
+            mask_rgba = label2rgba(mask_np, image_np)
+            fp_rgba = fp2rgb(mask_np, output_np, image_np)
+            fn_rgba = fn2rgb(mask_np, output_np, image_np)
+            gt_img = image_np
 
             #Log images to wandb
             wandb.log({f"images on {epoch} epoch validation": 
                     [wandb.Image(gt_img, caption=f"GT Image \n {file_name}"),
                     wandb.Image(mask_rgba, caption="GT Mask"),
                     wandb.Image(output_rgba, caption="Model Prediction"),
-                    wandb.Image(to_pil_image(fp_rgb), caption="false positive"),
-                    wandb.Image(to_pil_image(fn_rgb), caption="false negative")]
+                    wandb.Image(fp_rgba, caption="false positive"),
+                    wandb.Image(fn_rgba, caption="false negative")]
                     })
     
     
@@ -122,7 +125,7 @@ def validation(epoch, model, val_loader, thr=0.5):
             
             # 시각화용 result
             if (step + 1) % 20 == 0:
-                result = [(o, m, p) for o, m, p in zip(outputs.detach().cpu(), masks.detach().cpu(), image_paths)]
+                result = [(o, m, i, p) for o, m, i, p in zip(outputs.detach().cpu(), masks.detach().cpu(), images.detach().cpu(), image_paths)]
                 results.append(result)
                 
     dices = torch.cat(dices, 0)
@@ -160,7 +163,7 @@ def train(args, model, train_loader, val_loader, criterion, optimizer, scheduler
             loss.backward()
             optimizer.step()
             
-            if (step + 1) % 25 == 0:
+            if (step + 1) % 20 == 0:
                 print(
                     f'{datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")} | '
                     f'Epoch [{epoch+1}/{args.num_epochs}], '
@@ -234,7 +237,7 @@ def main(args):
     train_loader = DataLoader(
         dataset=train_dataset, 
         batch_size=args.batch_size,
-        shuffle=True,
+        shuffle=False,
         num_workers=8,
         drop_last=True,
     )
