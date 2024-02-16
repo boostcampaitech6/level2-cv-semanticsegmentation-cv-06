@@ -135,6 +135,10 @@ def validation(epoch, model, val_loader, thr=0.5):
     print(dice_str)
     
     avg_dice = torch.mean(dices_per_class).item()
+
+    # Log dice scores per class
+    wandb.log({f"Dice Score/{c}": d.item() for c, d in zip(CLASSES, dices_per_class)})
+    wandb.log({"Average Dice Score": avg_dice})
     
     return avg_dice, dice_str, results
 
