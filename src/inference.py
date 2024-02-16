@@ -98,6 +98,7 @@ def parse_args():
     parser.add_argument('--pt', type=str, default='best.pt')
     parser.add_argument('--res_dir', help='save pth dir path and serial', default='/data/ephemeral/home/level2-cv-semanticsegmentation-cv-06/results')
     parser.add_argument('--verbose', type=bool, default=False)
+    parser.add_argument('--gray', type=bool, default=False)
     args = parser.parse_args()
 
     return args
@@ -109,7 +110,7 @@ def main(args):
     model = torch.load(os.path.join(save_dir, args.pt))
     
     tf = A.Resize(512, 512)
-    test_dataset = XRayInferenceDataset(args.image_root, transforms=tf)
+    test_dataset = XRayInferenceDataset(args.image_root, transforms=tf, gray=args.gray)
 
     test_loader = DataLoader(
     dataset=test_dataset, 

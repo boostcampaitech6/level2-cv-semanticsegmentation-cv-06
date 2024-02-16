@@ -6,6 +6,7 @@ import datetime
 import numpy as np
 from tqdm.auto import tqdm
 import albumentations as A
+import cv2
 from PIL import Image
 import argparse
 
@@ -68,7 +69,7 @@ def loss_check(epoch, loss, pre_loss, file_list, save_dir, serial):
         file.write("\n")
 
 # wandb 시각화
-def visualize_and_log_wandb(results, epoch):
+def visualize_and_log_wandb(results, epoch, gray=False):
     for result in tqdm(results, total=len(results)):
         for output, mask, image, image_path in result:
 
@@ -76,6 +77,8 @@ def visualize_and_log_wandb(results, epoch):
             mask_np = mask.numpy()
             image_np = np.array(image)
             image_np = (image_np.transpose(1, 2, 0) * 255.).astype('uint8')
+            if gray:
+                image_np = cv2.cvtColor(image_np, cv2.COLOR_GRAY2RGB)
             image_np = np.array(Image.fromarray(image_np).resize((512, 512)))
             file_name = '/'.join(image_path.split('/')[-2:])
 
@@ -206,7 +209,7 @@ def train(args, model, train_loader, val_loader, criterion, optimizer, scheduler
             
             print("\n" + "Wandb image logging ...")
             start_time = datetime.datetime.now()
-            visualize_and_log_wandb(results, epoch+1)
+            visualize_and_log_wandb(results, epoch+1, args.gray)
             end_time = datetime.datetime.now()
             
             elapsed_time = end_time - start_time
@@ -222,6 +225,7 @@ def parse_args():
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--num_epochs', type=int, default=20)
     parser.add_argument('--val_interval', type=int, default=20)
+    parser.add_argument('--gray', type=bool, default=False)
     args = parser.parse_args()
 
     return args
@@ -235,8 +239,8 @@ def main(args):
     # transform 정의
     tf = A.Resize(512, 512)
     
-    train_dataset = XRayDataset(args.image_root, args.label_root, is_train=True, transforms=tf)
-    valid_dataset = XRayDataset(args.image_root, args.label_root, is_train=False, transforms=tf)
+    train_dataset = XRayDataset(args.image_root, args.label_root, is_train=True, transforms=tf, gray=args.gray)
+    valid_dataset = XRayDataset(args.image_root, args.label_root, is_train=False, transforms=tf, gray=args.gray)
 
     train_loader = DataLoader(
         dataset=train_dataset, 
@@ -273,7 +277,7 @@ if __name__ == '__main__':
     
     wandb.init(project="CV06_Segmantation",
                #entity="innovation-vision-tech",
-               name=f"deeplabv3_resnet101_{args.num_epochs}e_calcloss(dice3,bce1)_adam_MultiStepLR",
+               name=f"deeplabv3_resnet101_{args.num_epochs}e_calcloss(dice3,bce1)_adam_MultiStepLR_shuffle_false",
                notes="",
                config={
                     "batch_size": args.batch_size,

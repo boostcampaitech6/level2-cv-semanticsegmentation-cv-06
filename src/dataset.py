@@ -19,7 +19,7 @@ from utils import set_seed
 set_seed()
 
 class XRayDataset(Dataset):
-    def __init__(self, image_root, label_root, is_train=True, transforms=None):
+    def __init__(self, image_root, label_root, is_train=True, transforms=None, gray=False):
         
         pngs = {
             os.path.relpath(os.path.join(root, fname), start=image_root)
@@ -88,6 +88,7 @@ class XRayDataset(Dataset):
         self.labelnames = labelnames
         self.is_train = is_train
         self.transforms = transforms
+        self.gray = gray
     
     def __len__(self):
         return len(self.filenames)
@@ -101,6 +102,9 @@ class XRayDataset(Dataset):
         image_path = os.path.join(self.image_root, image_name)
         
         image = cv2.imread(image_path)
+        if self.gray:
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            image = image[..., np.newaxis]
         image = image / 255.
         
         label_name = self.labelnames[item]
@@ -144,7 +148,7 @@ class XRayDataset(Dataset):
     
     
 class XRayInferenceDataset(Dataset):
-    def __init__(self, image_root, transforms=None):
+    def __init__(self, image_root, transforms=None, gray=False):
         pngs = {
             os.path.relpath(os.path.join(root, fname), start=image_root)
             for root, _dirs, files in os.walk(image_root)
@@ -158,6 +162,7 @@ class XRayInferenceDataset(Dataset):
         self.image_root = image_root
         self.filenames = _filenames
         self.transforms = transforms
+        self.gray = gray
     
     def __len__(self):
         return len(self.filenames)
@@ -167,6 +172,9 @@ class XRayInferenceDataset(Dataset):
         image_path = os.path.join(self.image_root, image_name)
         
         image = cv2.imread(image_path)
+        if self.gray:
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            image = image[..., np.newaxis]
         image = image / 255.
         
         if self.transforms is not None:
