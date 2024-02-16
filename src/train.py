@@ -53,29 +53,44 @@ def save_model(model, save_dir, file_name='best.pt'):
     os.makedirs(save_dir, exist_ok=True)
     output_path = os.path.join(save_dir, file_name)
     torch.save(model, output_path)
-    
+
+# loss 튀는 구간 체크
+def loss_check(epoch, loss, pre_loss, file_list, save_dir, serial):
+    os.makedirs(os.path.join(save_dir, serial), exist_ok=True)
+    path = os.path.join(save_dir,serial,'loss_check.txt')
+    image_paths = '\n'.join([p for p in file_list])
+    with open(path, 'a', encoding='utf-8') as file:
+        file.write("="*10+f" train_{epoch+1} "+"="*10 +"\n")
+        file.write(f"loss : {loss}" + "\n")
+        file.write(f"pre_loss : {pre_loss}" + "\n")
+        file.write(f"increase : {loss - pre_loss}" + "\n")
+        file.write(image_paths + "\n")
+        file.write("\n")
+
+# wandb 시각화
 def visualize_and_log_wandb(results, epoch):
-    for result in results:
-        for output, mask, image, image_path in result:
+    for result in tqdm(results, total=len(results)):
+        for output, mask, image_path in result:
 
             output_np = output.numpy()
             mask_np = mask.numpy()
-            image_np = image.numpy().transpose(1,2,0)
             file_name = '/'.join(image_path.split('/')[-2:])
 
             output_rgba = label2rgba(output_np)
             mask_rgba = label2rgba(mask_np)
             fp_rgb = fp2rgb(mask_np, output_np)
             fn_rgb = fn2rgb(mask_np, output_np)
+            gt_img = Image.open(image_path).resize((512,512))
 
             #Log images to wandb
-            wandb.log({f"images on {epoch+1} epochs": 
-                    [wandb.Image(image_np, caption=f"GT Image \n {file_name}"),
+            wandb.log({f"images on {epoch} epoch validation": 
+                    [wandb.Image(gt_img, caption=f"GT Image \n {file_name}"),
                     wandb.Image(mask_rgba, caption="GT Mask"),
                     wandb.Image(output_rgba, caption="Model Prediction"),
                     wandb.Image(to_pil_image(fp_rgb), caption="false positive"),
                     wandb.Image(to_pil_image(fn_rgb), caption="false negative")]
                     })
+    
     
 # validation
 def validation(epoch, model, val_loader, thr=0.5):
@@ -85,7 +100,6 @@ def validation(epoch, model, val_loader, thr=0.5):
     dices = []
     results = []
     with torch.no_grad():
-        n_class = len(CLASSES)
 
         for step, (images, masks, image_paths) in tqdm(enumerate(val_loader), total=len(val_loader)):
             images, masks = images.cuda(), masks.cuda()          
@@ -96,7 +110,7 @@ def validation(epoch, model, val_loader, thr=0.5):
             output_h, output_w = outputs.size(-2), outputs.size(-1)
             mask_h, mask_w = masks.size(-2), masks.size(-1)
             
-            # gt와 prediction의 크기가 다른 경우 prediction을 gt에 맞춰 interpolation 합니다.
+            # gt와 prediction의 크기가 다른 경우 prediction을 gt에 맞춰 interpolation
             if output_h != mask_h or output_w != mask_w:
                 outputs = F.interpolate(outputs, size=(mask_h, mask_w), mode="bilinear")
             
@@ -106,8 +120,10 @@ def validation(epoch, model, val_loader, thr=0.5):
             dice = dice_coef(masks, outputs)
             dices.append(dice)
             
-            result = [(o, m, i, p) for o, m, i, p in zip(outputs.detach().cpu(), masks.detach().cpu(), images.detach().cpu(), image_paths)]
-            results.append(result)
+            # 시각화용 result
+            if (step + 1) % 20 == 0:
+                result = [(o, m, p) for o, m, p in zip(outputs.detach().cpu(), masks.detach().cpu(), image_paths)]
+                results.append(result)
                 
     dices = torch.cat(dices, 0)
     dices_per_class = torch.mean(dices, 0)
@@ -120,7 +136,8 @@ def validation(epoch, model, val_loader, thr=0.5):
     
     avg_dice = torch.mean(dices_per_class).item()
     
-    return avg_dice, results, dice_str
+    return avg_dice, dice_str, results
+
 
 def train(args, model, train_loader, val_loader, criterion, optimizer, scheduler):
     print(f'Start training..')
@@ -132,19 +149,17 @@ def train(args, model, train_loader, val_loader, criterion, optimizer, scheduler
     for epoch in range(args.num_epochs):
         model.train()
 
-        for step, (images, masks, _) in enumerate(train_loader):            
-            # gpu 연산을 위해 device 할당합니다.
+        pre_loss = 100.
+        for step, (images, masks, image_paths) in enumerate(train_loader):            
             images, masks = images.cuda(), masks.cuda()    
             model = model.cuda()        
             outputs = model(images)['out']
             
-            # loss를 계산합니다.
             loss = criterion(outputs, masks)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             
-            # step 주기에 따라 loss를 출력합니다.
             if (step + 1) % 25 == 0:
                 print(
                     f'{datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")} | '
@@ -154,22 +169,24 @@ def train(args, model, train_loader, val_loader, criterion, optimizer, scheduler
                 )
                 current_lr = optimizer.param_groups[0]['lr']
                 wandb.log({'Loss': round(loss.item(),4), 'learning rate':current_lr})
+                
+                if round(loss.item(), 4) > pre_loss and (round(loss.item(), 4) - pre_loss > 0.1):
+                    loss_check(epoch+1, round(loss.item(), 4), pre_loss, image_paths, args.save_dir, serial)
+                    pre_loss = round(loss.item(), 4)
+                else:
+                    pre_loss = round(loss.item(), 4)
              
         scheduler.step()
-            
-        # validation 주기에 따라 loss를 출력하고 best model을 저장합니다.
-        # validation 함수는 위에 정의됨
+        
+        # validation
         if (epoch + 1) % args.val_interval == 0:
-            dice, results, dice_log = validation(epoch + 1, model, val_loader)
+            dice, dice_log, results = validation(epoch+1, model, val_loader)
             
             wandb.log({'dice score': dice})
             
-            print("Wandb image logging ...")
-            visualize_and_log_wandb(results, epoch)
-            
             if best_dice < dice:
                 print(f"Best performance at epoch: {epoch + 1}, {best_dice:.4f} -> {dice:.4f}")
-                print(f"Save model in {args.save_dir}")
+                print(f"Save model in {os.path.join(args.save_dir, serial)}")
                 best_dice = dice
                 save_model(model, os.path.join(args.save_dir, serial), file_name=f'{epoch+1}.pt')
                 save_model(model, os.path.join(args.save_dir, serial), file_name='best.pt')
@@ -179,6 +196,15 @@ def train(args, model, train_loader, val_loader, criterion, optimizer, scheduler
                     file.write("="*10+f" validation_{epoch+1} "+"="*10 +"\n")
                     file.write(dice_log)
                     file.write("\n")
+            
+            print("\n" + "Wandb image logging ...")
+            start_time = datetime.datetime.now()
+            visualize_and_log_wandb(results, epoch+1)
+            end_time = datetime.datetime.now()
+            
+            elapsed_time = end_time - start_time
+            print("\n" + f"==>> 총 visualization 시간: {str(elapsed_time)}")
+                
                 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train a segmentor')
@@ -192,6 +218,7 @@ def parse_args():
     args = parser.parse_args()
 
     return args
+
 
 def main(args):
     
@@ -214,7 +241,7 @@ def main(args):
     
     valid_loader = DataLoader(
         dataset=valid_dataset, 
-        batch_size=8,
+        batch_size=2,
         shuffle=False,
         num_workers=2,
         drop_last=False
@@ -252,4 +279,4 @@ if __name__ == '__main__':
     end_time = datetime.datetime.now()
     
     elapsed_time = end_time - start_time
-    print(f"총 학습 시간: {str(elapsed_time)}")
+    print("\n" + f"==>> 총 학습 시간: {str(elapsed_time)}" + "\n")

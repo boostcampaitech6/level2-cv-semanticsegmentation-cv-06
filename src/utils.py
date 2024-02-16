@@ -1,13 +1,10 @@
 # python native
-import os
-import json
 import random
-import datetime
-from functools import partial
 
 # external library
 from PIL import Image
 import numpy as np
+from skimage.transform import resize
 
 # torch
 import torch
@@ -46,30 +43,29 @@ def label2rgb(label):
 
 # 겹쳐진 클래스 고려한 시각화
 def label2rgba(label):
-    image_size = label.shape[1:] + (4, )  # Add an alpha channel
-    images = []
+    image_size = (512,512) + (4, )  # Add an alpha channel
+    result_image = Image.new('RGBA', image_size[:-1], (0, 0, 0, 0))
     
     for i, class_label in enumerate(label):
+        class_label = resize(class_label, (512,512))
         mask = class_label == 1
         image = np.zeros(image_size, dtype=np.uint8)
-        image[mask] = PALETTE[i] + (120,)  # Add opacity
-        images.append(Image.fromarray(image, 'RGBA'))
-    
-    result_image = Image.alpha_composite(Image.new('RGBA', image_size[:-1], (0, 0, 0, 0)), images[0])
-    for image in images[1:]:
-        result_image = Image.alpha_composite(result_image, image)
+        image[mask] = PALETTE[i] + (128,)  # Add opacity
+        result_image = Image.alpha_composite(result_image, Image.fromarray(image, 'RGBA'))
     
     return result_image
 
 
 # 실제 정답인데 정답이 아니라고 한 것 (false negative)
 def fn2rgb(true, pred):
-    image_size = true.shape[1:] + (3, )
+    image_size = (512, 512) + (3, )
     image = np.zeros(image_size, dtype=np.uint8)
     
     for i, pred_label in enumerate(pred):
-        mistake = pred_label != true[i]
-        false_negative = mistake & (true[i] == 1)
+        pred_label = resize(pred_label, (512,512))
+        true_label = resize(true[i], (512,512))
+        mistake = pred_label != true_label
+        false_negative = mistake & (true_label == 1)
         image[false_negative] = PALETTE[i]
         
     return image
@@ -77,12 +73,14 @@ def fn2rgb(true, pred):
 
 # 실제 정답이 아닌데 정답이라고 한 것 (false positive)
 def fp2rgb(true, pred):
-    image_size = true.shape[1:] + (3, )
+    image_size = (512, 512) + (3, )
     image = np.zeros(image_size, dtype=np.uint8)
     
     for i, pred_label in enumerate(pred):
-        mistake = pred_label != true[i]
-        false_positive = mistake & (true[i] == 0)
+        pred_label = resize(pred_label, (512,512))
+        true_label = resize(true[i], (512,512))
+        mistake = pred_label != true_label
+        false_positive = mistake & (true_label == 0)
         image[false_positive] = PALETTE[i]
         
     return image
