@@ -1,0 +1,9 @@
+{
+  "train_path": "./train.py",
+  "receiver": "any",
+
+  "exp_name": "test_name",
+  "seed": "666",
+  "epoch": "10",
+  "data_dir": "test_data_dir"
+}
